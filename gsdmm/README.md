@@ -1,4 +1,4 @@
-# Gibbs sampling algorithm for the Dirichlet multinomial mixture model (GSDMM)
+## Gibbs sampling algorithm for the Dirichlet multinomial mixture model (GSDMM)
 
 Largely based on [this code](https://github.com/rwalk/gsdmm), but edited to include `random_state` variable to standardize initial topic settings of documents.
 
