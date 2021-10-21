@@ -1,4 +1,4 @@
-## GPU-based Dirichlet multinomial mixture model (GSDMM)
+## GPU-based Dirichlet multinomial mixture model (GPUDMM)
 
 Largely based on [this code](https://github.com/WHUIR/GPUDMM/tree/2b89d949557e99cbfce714a7c486f954f0c65ee8), but implemented in Python. Changed to include `random_state` variable to standardize initial topic settings of documents and for reproducibility. A second random_state within the `run_iteration()` step can be implemented again for reproducibility when electing to promote similar words.
 
