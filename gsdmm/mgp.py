@@ -83,7 +83,8 @@ class MovieGroupProcess:
         :return: int
             index of randomly selected output
         '''
-        return [i for i, entry in enumerate(multinomial.rvs(1, p, random_state=random_state)) if entry != 0][0]
+        # return [i for i, entry in enumerate(multinomial.rvs(1, p, random_state=random_state)) if entry != 0][0]
+        return np.argmax(multinomial.rvs(1, p, random_state=random_state))
 
     def fit(self, docs, vocab_size, random_state=None):
         '''
@@ -143,9 +144,11 @@ class MovieGroupProcess:
                         del self.n_z_w[z_old][word]
 
                 # draw sample from distribution to find new cluster
-                # p = self.score(doc, i)
-                # z_new = self._sample(p)
-                z_new = self.choose_best_label(doc, i)
+# randomize new cluster from distribution
+                p = self.score(doc, i)
+                z_new = self._sample(p, random_state)
+# select new cluster as most likely
+                # z_new = self.choose_best_label(doc, i)
 
                 # transfer doc to the new cluster
                 if z_new != z_old:
@@ -209,13 +212,13 @@ class MovieGroupProcess:
             for j in range(1, doc_size + 1):
                 lD2 += np.log(self.n_z[label] + V * beta + j - 1)
             p[label] = np.exp(lN1 - lD1 + lN2 - lD2)
-            self.pdz[docID][label] = p[label]
+            # self.pdz[docID][label] = p[label]
 
         # normalize the probability vector
         pnorm = sum(p)
         pnorm = pnorm if pnorm > 0 else 1
-        for label in range(K):
-            self.pdz[docID][label] = self.pdz[docID][label]/pnorm
+        # for label in range(K):
+        #     self.pdz[docID][label] = self.pdz[docID][label]/pnorm
         return [pp/pnorm for pp in p]
 
     def choose_best_label(self, doc, docID):
@@ -239,7 +242,8 @@ class MovieGroupProcess:
             p_word = []
             for word in self.n_z_w[ii].keys():
                 phi_z_w = (self.n_z_w[ii][word] + beta)/(self.n_z[ii] + V * beta)
-                p_word.append((word, phi_z_w))
+                if word:
+                    p_word.append((word, phi_z_w))
             if p_word:
                 if len(p_word) >= nwords:
                     p[ii] = [x[0] for x in sorted(p_word, key=lambda x: x[1],
