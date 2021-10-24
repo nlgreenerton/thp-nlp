@@ -1,7 +1,7 @@
 import numpy as np
-# from numpy.random import multinomial
 from scipy.stats import multinomial
 from gensim.corpora import Dictionary
+from gensim.models import TfidfModel
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import csr_matrix
 
@@ -49,29 +49,12 @@ class MovieGroupProcess:
         self.n_z_w = [{} for i in range(K)]  # cluster word distrib
         self.d_z = []
         self.pdz = []
-
-    @staticmethod
-    def from_data(K, alpha, beta, D, vocab_size, cluster_doc_count,
-                  cluster_word_count, cluster_word_distribution):
-        '''
-        Reconstitute a MovieGroupProcess from previously fit data
-        :param K:
-        :param alpha:
-        :param beta:
-        :param D:
-        :param vocab_size:
-        :param cluster_doc_count:
-        :param cluster_word_count:
-        :param cluster_word_distribution:
-        :return:
-        '''
-        mgp = MovieGroupProcess(K, alpha, beta, n_iters=30)
-        mgp.number_docs = D
-        mgp.vocab_size = vocab_size
-        mgp.m_z = cluster_doc_count
-        mgp.n_z = cluster_word_count
-        mgp.n_z_w = cluster_word_distribution
-        return mgp
+        self.dict_ = Dictionary()
+        self.corpus = []
+        self.corpus_size = None
+        self.to_include = []
+        self.to_exclude = []
+        self.tfidf = False
 
     @staticmethod
     def _sample(p, random_state=None):
@@ -83,10 +66,10 @@ class MovieGroupProcess:
         :return: int
             index of randomly selected output
         '''
-        # return [i for i, entry in enumerate(multinomial.rvs(1, p, random_state=random_state)) if entry != 0][0]
+
         return np.argmax(multinomial.rvs(1, p, random_state=random_state))
 
-    def fit(self, docs, vocab_size, random_state=None):
+    def fit(self, docs, min_df=1, max_df=1.0, tfidf=False, random_state=None):
         '''
         Cluster the input documents
         :param docs: list of list
@@ -99,81 +82,94 @@ class MovieGroupProcess:
 
         D = len(docs)
         self.number_docs = D
-        self.vocab_size = vocab_size
+        self.tfidf = tfidf
 
-        # unpack to easy var names
-        # m_z, n_z = self.cluster_doc_count, self.cluster_word_count
-        # n_z_w = self.cluster_word_distribution
         cluster_count = K
-        self.d_z = [None for i in range(len(docs))]
+        self.d_z = [-1 for i in range(len(docs))]
+
+        # create dictionary
+        self.dict_ = Dictionary(docs)
+        self.dict_.filter_extremes(min_df, max_df)
+        if '' in self.dict_.token2id:
+            id_ = self.dict_.token2id['']
+            self.dict_.filter_tokens([id_])
+
+        self.corpus = [self.dict_.doc2bow(line) for line in docs]
+        self.vocab_size = len(self.dict_)
+
+        corpus = self.corpus
+        if tfidf:
+            tf = TfidfModel(corpus, dictionary=self.dict_)
+
+        self.to_include = np.flatnonzero(corpus)
+        self.to_exclude = np.array(list(set(range(D)).difference(set(self.to_include))))
+
+        # self.corpus = [self.dict_.doc2bow(line) for line in docs[to_include]]
+        # corpus = self.corpus
+        self.corpus_size = len(self.to_include)
+        C = self.corpus_size
 
         # initialize the clusters
-
-        zs = multinomial.rvs(1, [1.0 / K for _ in range(K)], D, random_state)
+        zs = multinomial.rvs(1, [1.0 / K for _ in range(K)], C, random_state)
         zs = np.argmax(zs, 1)
-        for i, doc in enumerate(docs):
 
-            # choose a random  initial cluster for the doc
-            # z = self._sample([1.0 / K for _ in range(K)], random_state)
+        for i, id_ in enumerate(self.to_include):#range(D):
+            doc = corpus[id_]
+            if tfidf:
+                doc = tf[corpus[id_]]
+
             z = zs[i]
-            self.d_z[i] = z
+            self.d_z[id_] = z
             self.m_z[z] += 1
-            self.n_z[z] += len(doc)
+            self.n_z[z] += np.sum(doc, 0)[1]
 
-            for word in doc:
-                if word not in self.n_z_w[z]:
-                    self.n_z_w[z][word] = 0
-                self.n_z_w[z][word] += 1
+            for wordID, count_ in doc:
+                if wordID not in self.n_z_w[z]:
+                    self.n_z_w[z][wordID] = 0
+                self.n_z_w[z][wordID] += count_
 
             self.pdz = [list(np.zeros(K)) for _ in range(D)]
 
         for _iter in range(n_iters):
             total_transfers = 0
 
-            for i, doc in enumerate(docs):
-                # remove the doc from its current cluster
-                z_old = self.d_z[i]
+            for id_ in self.to_include:
+                doc = corpus[id_]
+                if tfidf:
+                    doc = tf[corpus[id_]]
+
+                z_old = self.d_z[id_]
                 self.m_z[z_old] -= 1
-                self.n_z[z_old] -= len(doc)
+                self.n_z[z_old] -= np.sum(doc, 0)[1]
 
-                for word in doc:
-                    self.n_z_w[z_old][word] -= 1
+                for wordID, count_ in doc:
+                    self.n_z_w[z_old][wordID] -= count_
 
-                    # compact dictionary to save space
-                    if self.n_z_w[z_old][word] == 0:
-                        del self.n_z_w[z_old][word]
+                    if self.n_z_w[z_old][wordID] == 0:
+                        del self.n_z_w[z_old][wordID]
 
-                # draw sample from distribution to find new cluster
-# randomize new cluster from distribution
-                p = self.score(doc, i)
+                p = self.score(doc, id_)
                 z_new = self._sample(p, random_state)
-# select new cluster as most likely
-                # z_new = self.choose_best_label(doc, i)
 
-                # transfer doc to the new cluster
-                if z_new != z_old:
+                if z_old != z_new:
                     total_transfers += 1
 
-                self.d_z[i] = z_new
+                self.d_z[id_] = z_new
                 self.m_z[z_new] += 1
-                self.n_z[z_new] += len(doc)
+                self.n_z[z_new] += np.sum(doc, 0)[1]
 
-                for word in doc:
-                    if word not in self.n_z_w[z_new]:
-                        self.n_z_w[z_new][word] = 0
-                    self.n_z_w[z_new][word] += 1
+                for wordID, count_ in doc:
+                    if wordID not in self.n_z_w[z_new]:
+                        self.n_z_w[z_new][wordID] = 0
+                    self.n_z_w[z_new][wordID] += count_
 
             cluster_count_new = sum([1 for v in self.m_z if v > 0])
-            # print(f"""In stage {_iter}: transferred {total_transfers} clusters
-            # with {cluster_count_new} clusters populated""")
-
-            if (total_transfers == 0) and (_iter > 25) and (cluster_count_new
-                                                            == cluster_count):
+            if (total_transfers == 0) and (_iter > 25) and (cluster_count_new == cluster_count):
                 print("Converged.  Breaking out.")
                 break
+
             cluster_count = cluster_count_new
-        # self.cluster_word_distribution = n_z_w
-        return  # self.d_z
+        return
 
     def score(self, doc, docID):
         '''
@@ -187,38 +183,30 @@ class MovieGroupProcess:
             the probability of the document appearing in a particular cluster
         '''
         alpha, beta, K = self.alpha, self.beta, self.K
-        V, D = self.vocab_size, self.number_docs
-        # m_z, n_z = self.cluster_doc_count, self.cluster_word_count
-        # n_z_w = self.cluster_word_distribution
+        V, C = self.vocab_size, self.corpus_size
 
         p = [0 for _ in range(K)]
 
-        #  We break the formula into the following pieces
-        #  p = N1*N2/(D1*D2) = exp(lN1 - lD1 + lN2 - lD2)
-        #  lN1 = log(m_z[z] + alpha)
-        #  lN2 = log(D - 1 + K*alpha)
-        #  lN2 = log(product(n_z_w[w] + beta)) = sum(log(n_z_w[w] + beta))
-        #  lD2 = log(product(n_z[d] + V*beta + i -1))
-        #      = sum(log(n_z[d] + V*beta + i -1))
+        lD1 = np.log(C - 1 + K * alpha)
+        doc_size = np.sum(doc, 0)[1]
+        if self.tfidf:
+            bow = self.corpus[docID]
+            doc_size = np.sum(bow, 0)[1]
 
-        lD1 = np.log(D - 1 + K * alpha)
-        doc_size = len(doc)
         for label in range(K):
             lN1 = np.log(self.m_z[label] + alpha)
             lN2 = 0
             lD2 = 0
-            for word in doc:
-                lN2 += np.log(self.n_z_w[label].get(word, 0) + beta)
+            for wordID, count_ in doc:
+                lN2 += count_*np.log(self.n_z_w[label].get(wordID, 0) + beta)
             for j in range(1, doc_size + 1):
                 lD2 += np.log(self.n_z[label] + V * beta + j - 1)
             p[label] = np.exp(lN1 - lD1 + lN2 - lD2)
-            # self.pdz[docID][label] = p[label]
 
         # normalize the probability vector
         pnorm = sum(p)
         pnorm = pnorm if pnorm > 0 else 1
-        # for label in range(K):
-        #     self.pdz[docID][label] = self.pdz[docID][label]/pnorm
+
         return [pp/pnorm for pp in p]
 
     def choose_best_label(self, doc, docID):
@@ -228,52 +216,51 @@ class MovieGroupProcess:
             The doc token stream
         '''
         p = self.score(doc, docID)
-        return np.argmax(p)#, max(p)
+        return np.argmax(p)
 
     def label_top_words(self, nwords=10):
         '''
         List of top nwords for each cluster
         '''
         beta, K, V = self.beta, self.K, self.vocab_size
-        # n_z, n_z_w = self.cluster_word_count, self.cluster_word_distribution
+
         p = [[] for _ in range(K)]
-        topics = np.unique(self.d_z)
-        for ii in topics:#range(K):
-            p_word = []
-            for word in self.n_z_w[ii].keys():
-                phi_z_w = (self.n_z_w[ii][word] + beta)/(self.n_z[ii] + V * beta)
-                if word:
-                    p_word.append((word, phi_z_w))
-            if p_word:
-                if len(p_word) >= nwords:
-                    p[ii] = [x[0] for x in sorted(p_word, key=lambda x: x[1],
-                             reverse=True)][:nwords]
-                else:
-                    p[ii] = [x[0] for x in sorted(p_word, key=lambda x: x[1],
-                             reverse=True)]
+        for ii in range(K):
+            if self.m_z[ii]:
+                p_word = []
+                for word in self.n_z_w[ii].keys():
+                    phi_z_w = (self.n_z_w[ii][word] + beta)/(self.n_z[ii] + V * beta)
+                    if word:
+                        p_word.append((word, phi_z_w))
+                if p_word:
+                    if len(p_word) >= nwords:
+                        p[ii] = [self.dict_[x[0]] for x in sorted(p_word, key=lambda x: x[1],
+                                 reverse=True)][:nwords]
+                    else:
+                        p[ii] = [self.dict_[x[0]] for x in sorted(p_word, key=lambda x: x[1],
+                                 reverse=True)]
         return p
 
-    def compare_topic_terms(self, docs, wv=None):
+    def compare_topic_terms(self, wv=None):
         '''
         Compare topic terms with or without word vectors from calculated model
         '''
         dim, V = self.K, self.vocab_size
         words = self.label_top_words()
         tri = np.diag(np.ones(dim))
-        word2id = {k[1]: k[0] for k in Dictionary(docs).items()}
 
         if not wv:
             for ii in range(dim):
                 for jj in range(ii+1, dim):
                     nwords = min(len(words[ii]), len(words[jj]))
                     if nwords == 10:
-                        v1 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: word2id[x], words[ii][:nwords])))), shape=(1, V), dtype=float)
-                        v2 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: word2id[x], words[jj][:nwords])))), shape=(1, V), dtype=float)
+                        v1 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: self.dict_.token2id[x], words[ii][:nwords])))), shape=(1, V), dtype=float)
+                        v2 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: self.dict_.token2id[x], words[jj][:nwords])))), shape=(1, V), dtype=float)
                     else:
                         v1_nwords = len(words[ii])
                         v2_nwords = len(words[jj])
-                        v1 = csr_matrix(([1]*v1_nwords, ([0]*v1_nwords, list(map(lambda x: word2id[x], words[ii])))), shape=(1, V), dtype=float)
-                        v2 = csr_matrix(([1]*v2_nwords, ([0]*v2_nwords, list(map(lambda x: word2id[x], words[jj])))), shape=(1, V), dtype=float)
+                        v1 = csr_matrix(([1]*v1_nwords, ([0]*v1_nwords, list(map(lambda x: self.dict_.token2id[x], words[ii])))), shape=(1, V), dtype=float)
+                        v2 = csr_matrix(([1]*v2_nwords, ([0]*v2_nwords, list(map(lambda x: self.dict_.token2id[x], words[jj])))), shape=(1, V), dtype=float)
                     tri[ii, jj] = cosine_similarity(v1, v2)
         else:
             for ii in range(dim):
@@ -283,7 +270,7 @@ class MovieGroupProcess:
                     if v1 and v2:
                         tri[ii, jj] = wv.n_similarity(v1, v2)
 
-        if np.argwhere(np.triu(tri, 1) >= 5).any():
+        if np.argwhere(np.triu(tri, 1) >= 0.5).any():
             c = np.argwhere(np.triu(tri, 1) >= 0.5)
             return np.unique(c.flatten('F')[:c.shape[0]]).shape[0]
         return 0
@@ -307,11 +294,3 @@ class MovieGroupProcess:
                             tot += 1
                             sum_ += wv.wmdistance(' '.join(d1), ' '.join(d2))
         return sum_/tot
-
-
-def compute_V(texts):
-    V = set()
-    for text in texts:
-        for word in text:
-            V.add(word)
-    return len(V)

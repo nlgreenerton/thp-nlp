@@ -1,20 +1,27 @@
 ## Gibbs sampling algorithm for the Dirichlet multinomial mixture model (GSDMM)
 
-Largely based on [this code](https://github.com/rwalk/gsdmm), but edited to include `random_state` variable to standardize initial topic settings of documents.
+Largely based on [this code](https://github.com/rwalk/gsdmm) but edited to include `random_state` variable to standardize initial topic settings of documents and added tfidf-weighting option .
 
 Usage:
 ```python
 from gsdmm import mgp
-V = mgp.compute_V(docs)
 mg = mgp.MovieGroupProcess(K=40, alpha=.1, beta=.1, n_iters=30)
-mg.fit(docs, V, random_state=40)
+mg.fit(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
 ```
 
-`K`: maximum number of clusters, which should be well above the expected final number.
+`K`: integer maximum number of clusters, which should be well above the expected final number.
 
 `alpha`: float between 0 and 1 that controls the tendency for documents to be placed in empty clusters.
 
-`beta`: float bewteen 0 and 1 that controls the importance for documents within a cluster to share topic terms.
+`beta`: float between 0 and 1 that controls the importance for documents within a cluster to share topic terms.
+
+`min_df`: integer lower bound of occurrences for tokens.
+
+`max_df`: float between 0 and 1, upper (fractional) bound for tokens.
+
+`tfidf`: boolean whether or not to implement tfidf-weighting.
+
+`random_state`: integer seed for
 
 More information and figures illustrating the effects of hyperparameters can be found [here](https://dl.acm.org/doi/10.1145/2623330.2623715).
 
