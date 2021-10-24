@@ -21,7 +21,7 @@ mg.fit(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
 
 `tfidf`: boolean whether or not to implement tfidf-weighting.
 
-`random_state`: integer seed for
+`random_state`: integer seed
 
 More information and figures illustrating the effects of hyperparameters can be found [here](https://dl.acm.org/doi/10.1145/2623330.2623715).
 
