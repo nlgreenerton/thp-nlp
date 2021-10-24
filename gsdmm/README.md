@@ -1,6 +1,6 @@
 ## Gibbs sampling algorithm for the Dirichlet multinomial mixture model (GSDMM)
 
-Largely based on [this code](https://github.com/rwalk/gsdmm) but edited to include `random_state` variable to standardize initial topic settings of documents and added tfidf-weighting option .
+Largely based on [this code](https://github.com/rwalk/gsdmm) but edited to include `random_state` variable to standardize initial topic settings of documents and added tfidf-weighting option. Documents without any tokens are assigned label -1 and not involved in any fitting steps.
 
 Usage:
 ```python
