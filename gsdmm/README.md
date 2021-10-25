@@ -32,6 +32,7 @@ mg.fit(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
 
 More information and figures illustrating the effects of hyperparameters can be found [here](https://dl.acm.org/doi/10.1145/2623330.2623715).
 
+
 After fitting, the MovieGroupProcess object includes perhaps useful methods:
 
 `label_top_words(nwords=10)` returns a list of length `K` populated with top `nwords` words found in each populated topic. Topics without assigned documents return as empty lists.
