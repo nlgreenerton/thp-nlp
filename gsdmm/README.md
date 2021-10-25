@@ -6,7 +6,6 @@ Usage:
 ```python
 from gsdmm import mgp
 mg = mgp.MovieGroupProcess(K=40, alpha=.1, beta=.1, n_iters=30)
-mg.fit(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
 ```
 
 `K`: integer maximum number of clusters, which should be well above the expected final number.
@@ -14,6 +13,14 @@ mg.fit(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
 `alpha`: float between 0 and 1 that controls the tendency for documents to be placed in empty clusters.
 
 `beta`: float between 0 and 1 that controls the importance for documents within a cluster to share topic terms.
+
+`n_iters`: integer number of iterations.
+
+```python
+mg.fit(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
+```
+
+`docs`: iterable of iterables, tokenized documents for fitting.
 
 `min_df`: integer lower bound of occurrences for tokens.
 
