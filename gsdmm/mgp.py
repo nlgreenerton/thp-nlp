@@ -135,7 +135,7 @@ class MovieGroupProcess:
             for id_ in self.to_include:
                 doc = corpus[id_]
                 if self.tfidf:
-                    doc = self.tf[corpus[id_]]
+                    doc = self.tf_model[corpus[id_]]
 
                 z_old = self.d_z[id_]
                 self.m_z[z_old] -= 1
