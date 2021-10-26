@@ -55,6 +55,7 @@ class MovieGroupProcess:
         self.to_include = []
         self.to_exclude = []
         self.tfidf = False
+        self.tf_model = None
 
     @staticmethod
     def _sample(p, random_state=None):
@@ -69,22 +70,16 @@ class MovieGroupProcess:
 
         return np.argmax(multinomial.rvs(1, p, random_state=random_state))
 
-    def fit(self, docs, min_df=1, max_df=1.0, tfidf=False, random_state=None):
+    def initNewModel(self, docs, min_df=1, max_df=1.0, tfidf=False, random_state=None):
         '''
         Cluster the input documents
-        :param docs: list of list
-            list of lists containing the unique token set of each document
-        :param V: total vocabulary size for each document
-        :return: list of length len(doc)
-            cluster label for each document
         '''
-        K, n_iters = self.K, self.n_iters
+        K = self.K
 
         D = len(docs)
         self.number_docs = D
         self.tfidf = tfidf
 
-        cluster_count = K
         self.d_z = [-1 for i in range(len(docs))]
 
         # create dictionary
@@ -100,9 +95,9 @@ class MovieGroupProcess:
         corpus = self.corpus
         if tfidf:
             tf = TfidfModel(corpus, dictionary=self.dict_)
-
+            self.tf_model = tf
         self.to_include = np.flatnonzero(corpus)
-        self.to_exclude = np.array(list(set(range(D)).difference(set(self.to_include))))
+        # self.to_exclude = np.array(list(set(range(D)).difference(set(self.to_include))))
 
         # self.corpus = [self.dict_.doc2bow(line) for line in docs[to_include]]
         # corpus = self.corpus
@@ -113,7 +108,7 @@ class MovieGroupProcess:
         zs = multinomial.rvs(1, [1.0 / K for _ in range(K)], C, random_state)
         zs = np.argmax(zs, 1)
 
-        for i, id_ in enumerate(self.to_include):#range(D):
+        for i, id_ in enumerate(self.to_include):
             doc = corpus[id_]
             if tfidf:
                 doc = tf[corpus[id_]]
@@ -130,13 +125,17 @@ class MovieGroupProcess:
 
             self.pdz = [list(np.zeros(K)) for _ in range(D)]
 
+    def fit(self):
+        n_iters, corpus, K = self.n_iters, self.corpus, self.K
+        cluster_count = K
+
         for _iter in range(n_iters):
             total_transfers = 0
 
             for id_ in self.to_include:
                 doc = corpus[id_]
-                if tfidf:
-                    doc = tf[corpus[id_]]
+                if self.tfidf:
+                    doc = self.tf[corpus[id_]]
 
                 z_old = self.d_z[id_]
                 self.m_z[z_old] -= 1
@@ -149,7 +148,7 @@ class MovieGroupProcess:
                         del self.n_z_w[z_old][wordID]
 
                 p = self.score(doc, id_)
-                z_new = self._sample(p, random_state)
+                z_new = self._sample(p) #, random_state)
 
                 if z_old != z_new:
                     total_transfers += 1

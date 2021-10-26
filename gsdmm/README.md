@@ -17,14 +17,15 @@ mg = mgp.MovieGroupProcess(K=40, alpha=.1, beta=.1, n_iters=30)
 - `n_iters`: integer number of iterations
 
 ```python
-mg.fit(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
+mg.initNewModel(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
+mg.fit()
 ```
 
 - `docs`: iterable of iterables, tokenized documents for fitting
 
 - `min_df`: integer lower bound of occurrences for tokens
 
-- `max_df`: float between 0 and 1, upper (fractional) bound for tokens
+- `max_df`: float between 0 and 1, upper bound for tokens
 
 - `tfidf`: boolean whether or not to implement tfidf-weighting
 

@@ -8,22 +8,49 @@ from gpudmm import gpudmm
 schema = gpudmm.buildSchema(wv, docs, threshold=0.5)
 ```
 
-`wv`: [Gensim](f)
-`docs`: iterable of iterables, tokenized documents for fitting
+- `wv`: word vectors in [Gensim](https://radimrehurek.com/gensim_3.8.3/index.html) word2vec KeyedVectors format
 
-A schema dictionary connects tokens with similarity >= `threshold` according to the supplied word vectors `wv` in Gensim word2vec KeyedVectors format.
+- `docs`: iterable of iterables, tokenized documents for fitting
+
+- `threshold`: float between 0 and 1, similarity cutoff above which word pair is considered similar enough to be retained in the schema
+
+This first step is quite time-consuming so it wouldn't hurt to save the schema output for later reuse.
 
 ```python
 gpu = gpudmm.GPUDMM(K=40, alpha=.1, beta=.1, num_iter=30, weight=.1)
-gpu.initNewModel(docs, random_state=40)
-gpu.loadSchema(schema, threshold=0.5)
-gpu.run_iteration(random_state=40)
 ```
 
+- `K`: integer maximum number of clusters, which should be well above the expected final number
 
-Hyperparameters `alpha` and `beta` are as described in the [GSDMM model](https://github.com/nlgreenerton/thp-nlp/tree/main/gsdmm).
+- `alpha`: float between 0 and 1 that controls the tendency for documents to be placed in empty clusters
 
-`weight`: float between 0 and 1 that promotes similar words also in the overall vocabulary.
+- `beta`: float between 0 and 1 that controls the importance for documents within a cluster to share topic terms
+
+- `num_iter`: integer number of iterations
+
+- `weight`: float between 0 and 1 that promotes similar words also in the overall vocabulary
+
+Hyperparameters `alpha` and `beta` are also described in the [GSDMM model](https://github.com/nlgreenerton/thp-nlp/tree/main/gsdmm).
+
+```python
+gpu.initNewModel(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
+gpu.loadSchema(schema, threshold=0.5)
+gpu.run_iteration()
+```
+
+- `docs`: iterable of iterables, tokenized documents for fitting
+
+- `min_df`: integer lower bound of occurrences for tokens
+
+- `max_df`: float between 0 and 1, upper bound for tokens
+
+- `tfidf`: boolean whether or not to implement tfidf-weighting
+
+- `random_state`: integer seed
+
+- `schema`: output from `buildSchema()`
+
+- `threshold`: float between 0 and 1, threshold used in `buildSchema()`
 
 After fitting, the GPUDMM object includes perhaps useful methods:
 
