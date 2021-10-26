@@ -1,11 +1,11 @@
 import numpy as np
-# from numpy.random import multinomial
 from scipy.stats import multinomial, bernoulli
 from gensim.corpora import Dictionary
-from gensim.models.keyedvectors import WordEmbeddingSimilarityIndex
-from gensim.similarities.termsim import SparseTermSimilarityMatrix
+from gensim.models import TfidfModel
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import csr_matrix
+from gensim.models.keyedvectors import WordEmbeddingSimilarityIndex
+from gensim.similarities.termsim import SparseTermSimilarityMatrix
 
 
 class GPUDMM:
@@ -26,20 +26,21 @@ class GPUDMM:
 
         self.wordGPUFlag = []
         self.docToWordIDList = []
-        self.word2id = {}
-        self.id2word = {}
-        self.wordIDFMap = {}
-        self.docUsefulWords = {}
-        self.wordSet = set()
-        self.topWordIDList = []
         self.assignmentList = []
-        self.wordGPUInfo = []
 
         self.topicProbabilityGivenWord = []
         self.schemaMap = {}
         self.pz = []
         self.pdz = []
         self.phi = []
+        self.dict_ = Dictionary()
+        self.corpus = []
+        self.corpus_size = None
+        self.to_include = []
+        self.to_exclude = []
+        self.tfidf = False
+        self.tf_model = None
+        self.weight_min = 1.0
 
     def _sample(self, p, random_state=None):
         '''
@@ -50,48 +51,74 @@ class GPUDMM:
         :return: int
             index of randomly selected output
         '''
-        # return [i for i, entry in enumerate(multinomial.rvs(1, p, random_state=random_state)) if entry != 0][0]
+
         return np.argmax(multinomial.rvs(1, p, random_state=random_state))
 
-    def initNewModel(self, docs, random_state=None):
-        self.id2word = {k[0]: k[1] for k in Dictionary(docs).items()}
-        self.word2id = {k[1]: k[0] for k in Dictionary(docs).items()}
-        w2i = self.word2id
+    def initNewModel(self, docs, min_df=1, max_df=1.0, tfidf=False, random_state=None):
 
         D = len(docs)
         self.number_docs = D
-        self.vocab_size = len(w2i)
-        V = self.vocab_size
-        d2wil = self.docToWordIDList
+        self.tfidf = tfidf
+        self.dict_ = Dictionary(docs)
+        self.dict_.filter_extremes(min_df, max_df)
+        if '' in self.dict_.token2id:
+            id_ = self.dict_.token2id['']
+            self.dict_.filter_tokens([id_])
+
+        self.corpus = [self.dict_.doc2bow(line) for line in docs]
+        self.vocab_size = len(self.dict_)
+
+        corpus = self.corpus
+        if tfidf:
+            tf = TfidfModel(corpus, dictionary=self.dict_)
+            self.tf_model = tf
+
+        self.to_include = np.flatnonzero(corpus)
+        self.to_exclude = np.array(list(set(range(D)).difference(set(self.to_include))))
+
+        self.corpus_size = len(self.to_include)
+        # C = self.corpus_size
+
+        d_z = [-1 for i in range(D)]
+        V, K = self.vocab_size, self.K
+        d2wil = [None for _ in range(D)]
         mz, nz, nzw = self.mz, self.nz, self.nzw
-        K, d_z = self.K, self.assignmentList
-        wordGPUFlag, wordGPUInfo = self.wordGPUFlag, self.wordGPUInfo
+        wordGPUFlag = [None for _ in range(D)]
 
-        for i in range(D):
-            doc = docs[i]
-            tia = list(map(lambda x: w2i[x], doc))  # termIDArray
+        for id_ in self.to_include:
+            doc = corpus[id_]
+            tia = []  # termIDArray
+            for wordID, count_ in doc:
+                if count_ == 1:
+                    tia.append(wordID)
+                else:
+                    tia.extend([wordID]*count_)
             docWordGPUFlag = [False]*len(tia)
-            docWordGPUInfo = {}
 
-            wordGPUFlag.append(docWordGPUFlag)
-            wordGPUInfo.append(docWordGPUInfo)
-            d2wil.append(tia)
+            wordGPUFlag[id_] = docWordGPUFlag
+            d2wil[id_] = tia
 
         nzw = [list(np.zeros(V)) for _ in range(K)]
         tpgw = [list(np.zeros(K)) for _ in range(V)]
 
         zs = multinomial.rvs(1, [1.0 / K for _ in range(K)], D, random_state)
         zs = np.argmax(zs, 1)
-        for i, doc in enumerate(docs):
-            # z = self._sample([1.0 / K for _ in range(K)])
-            z = zs[i]
-            d_z.append(z)
-            mz[z] += 1
-            nz[z] += len(doc)
 
-            for word in doc:
-                wordID = w2i[word]
-                nzw[z][wordID] += 1
+        for id_ in self.to_include:
+            doc = corpus[id_]
+            if tfidf:
+                doc = tf[corpus[id_]]
+                doc_weight_min = np.min(doc, 0)[1]
+                if self.weight_min > doc_weight_min:
+                    self.weight_min = doc_weight_min
+
+            z = zs[id_]
+            d_z[id_] = z
+            mz[z] += 1
+            nz[z] += np.sum(doc, 0)[1]
+
+            for wordID, count_ in doc:
+                nzw[z][wordID] += count_
 
         self.mz = mz
         self.nz = nz
@@ -100,14 +127,13 @@ class GPUDMM:
         self.docToWordIDList = d2wil
         self.assignmentList = d_z
         self.wordGPUFlag = wordGPUFlag
-        self.wordGPUInfo = wordGPUInfo
         self.pz = list(np.zeros(K))
         self.phi = [list(np.zeros(V)) for _ in range(K)]
         self.pdz = [list(np.zeros(K)) for _ in range(D)]
         return
 
     def loadSchema(self, schema, threshold):
-        keep = self.id2word.keys()
+        keep = self.dict_.keys()
         filt_schema = dict(filter(lambda x: x[0] in keep, schema.items()))
         final_schema = dict()
         for k, v in filt_schema.items():
@@ -122,39 +148,26 @@ class GPUDMM:
     def run_iteration(self, random_state=None):
         num_iter, d2wil = self.num_iter, self.docToWordIDList
         K, V = self.K, self.vocab_size
-        alpha, beta, D = self.alpha, self.beta, self.number_docs
+        alpha, beta, C = self.alpha, self.beta, self.corpus_size
 
         for _iter in range(num_iter):
             self.updateTopicProbabilityGivenWord()
             total_transfers = 0
 
-            for s, tia in enumerate(d2wil):
-                preTopic = self.assignmentList[s]
-                self.ratioCount(preTopic, s, tia, -1, random_state)
+            for s, id_ in enumerate(self.to_include):
+                tia = d2wil[id_]
+                preTopic = self.assignmentList[id_]
+                self.ratioCount(preTopic, id_, tia, -1, random_state)
                 pzDist = []
                 for topic in range(K):
-                    pz = 1.0 * (self.mz[topic] + alpha) / (D - 1 + K * alpha)
-                    value, logSum = 1.0, 0.0
+                    pz = 1.0 * (self.mz[topic] + alpha) / (C - 1 + K * alpha)
+                    value = 1.0
 
                     for t, termID in enumerate(tia):
                         value *= (self.nzw[topic][termID] + beta) / (self.nz[topic] + V * beta + t)
 
                     value = value * pz
                     pzDist.append(value)
-
-# original random-esque topic assignment
-                # for i in range(1, K):
-                #     pzDist[i] += pzDist[i-1]
-                #
-                # u = np.random.rand() * pzDist[-1]
-                # newTopic = -1
-                #
-                # for i in range(K):
-                #     if pzDist[i] >= u:
-                #         newTopic = i
-                #         self.assignmentList[s] = newTopic
-                #         total_transfers += 1
-                #         break
 
 # topic assignment using _sample and pzDist
                 pzDist = np.asarray(pzDist)
@@ -165,34 +178,46 @@ class GPUDMM:
                 newTopic = self._sample(pzDist, random_state)
                 if newTopic != preTopic:
                     total_transfers += 1
-                    self.assignmentList[s] = newTopic
+                    self.assignmentList[id_] = newTopic
 
-# topic assignment as max according to pzDist
-                # pzDist = np.asarray(pzDist)
-                # pzNorm = sum(pzDist)
-                # pzNorm = pzNorm if pzNorm > 0 else 1
-                # pzDist = pzDist/pzNorm
-                # newTopic = np.argmax(pzDist)
-                # if newTopic != preTopic:
-                   # total_transfers += 1
+# original random topic assignment
+                # for i in range(1,K):
+                #     pzDist[i] += pzDist[i-1]
+                # u = np.random.rand() * pzDist[-1]
+                # newTopic = -1
+                #
+                # for i in range(K):
+                #     if pzDist[i] >= u:
+                #         newTopic = i
+                #         self.assignmentList[id_] = newTopic
+                #         total_transfers += 1
+                #         break
 
-                self.ratioCount(newTopic, s, tia, 1, random_state)
+                self.ratioCount(newTopic, id_, tia, 1, random_state)
             if total_transfers == 0 and _iter > 25:
-                print("Converged.  Breaking out.")
+                print("Converged. Breaking out.")
                 break
-        return  # self.assignmentList
+        return
 
     def ratioCount(self, topic, docID, termIDArray, flag, random_state=None):
-        wordGPUInfo, weight = self.wordGPUInfo, self.weight
+        weight = self.weight
         self.mz[topic] += flag
-        for wordID in termIDArray:
-            self.nzw[topic][wordID] += flag
-            self.nz[topic] += flag
+        doc = self.corpus[docID]
+        if self.tfidf:
+            doc = self.tf_model[doc]
+            for wordTuple in doc:
+                self.nzw[topic][wordTuple[0]] += flag * wordTuple[1]
+                self.nz[topic] += flag * wordTuple[1]
+
+        else:
+            for wordID in termIDArray:
+                self.nzw[topic][wordID] += flag
+                self.nz[topic] += flag
 
         schemaMap = self.schemaMap
-        gpuInfo = {}
+
         if flag > 0:
-            self.updateWordGPUFlag(docID, topic, random_state=random_state)
+            self.updateWordGPUFlag(docID, topic, random_state)
             wordGPUFlag = self.wordGPUFlag
 
             for t, wordID in enumerate(termIDArray):
@@ -203,11 +228,8 @@ class GPUDMM:
                         valueMap = schemaMap[wordID]
 
                         for entry in valueMap:
-                            self.nzw[topic][entry] += weight
-                            self.nz[topic] += weight
-                            gpuInfo[entry] = weight
-
-                wordGPUInfo[docID].update(gpuInfo)
+                            self.nzw[topic][entry] += weight * self.weight_min
+                            self.nz[topic] += weight * self.weight_min
 
         else:
             wordGPUFlag = self.wordGPUFlag
@@ -219,11 +241,8 @@ class GPUDMM:
                         valueMap = schemaMap[wordID]
 
                         for entry in valueMap:
-                            self.nz[topic] -= weight
-                            self.nzw[topic][entry] -= weight
-
-        self.wordGPUInfo = wordGPUInfo
-        return #self.assignmentList
+                            self.nz[topic] -= weight * self.weight_min
+                            self.nzw[topic][entry] -= weight * self.weight_min
 
     def updateWordGPUFlag(self, docID, newTopic, random_state=None):
         d2wil, wordGPUFlag = self.docToWordIDList, self.wordGPUFlag
@@ -233,8 +252,6 @@ class GPUDMM:
         for t, termID in enumerate(tia):
             maxProbability = self.findTopicMaxProbabilityGivenWord(termID)
             ratio = self.getTopicProbabilityGivenWord(newTopic, termID) / maxProbability
-            # a = np.random.rand()
-            # docWordGPUFlag.append(ratio > a)
             if ratio > 0:
                 a = bernoulli.rvs(ratio, random_state=random_state)
             else:
@@ -265,7 +282,7 @@ class GPUDMM:
 
         V, D = self.vocab_size, self.number_docs
         tpgw, K = self.topicProbabilityGivenWord, self.K
-        d2wil = self.docToWordIDList
+        # d2wil = self.docToWordIDList
 
         for i in range(V):
             row_sum = 0.0
@@ -276,18 +293,17 @@ class GPUDMM:
             for j in range(K):
                 tpgw[i][j] = tpgw[i][j] / row_sum
 
-        for i in range(D):
-            doc_word_id = d2wil[i]
-            row_sum = 0.0
-            for j in range(K):
-                self.pdz[i][j] = 0
-                for wordID in doc_word_id:
-                    self.pdz[i][j] += tpgw[wordID][j]
-
-                row_sum += self.pdz[i][j]
-            for j in range(K):
-                self.pdz[i][j] = self.pdz[i][j]/row_sum
-
+        # for id_ in self.to_include:
+        #     tia = d2wil[id_]
+        #     row_sum = 0.0
+        #     for j in range(K):
+        #         self.pdz[id_][j] = 0
+        #         for wordID in tia:
+        #             self.pdz[id_][j] += tpgw[wordID][j]
+        #
+        #         row_sum += self.pdz[id_][j]
+        #     for j in range(K):
+        #         self.pdz[id_][j] = self.pdz[id_][j]/row_sum
         self.topicProbabilityGivenWord = tpgw
         return
 
@@ -313,14 +329,15 @@ class GPUDMM:
         '''
         beta, K, V = self.beta, self.K, self.vocab_size
         p = [[] for _ in range(K)]
-        topics = np.unique(self.assignmentList)
+        # topics = np.unique(self.assignmentList)
 
-        for ii in topics:
+        for ii in range(K):#topics:
             p_word = []
-            for wordID, value in enumerate(self.nzw[ii]):
-                phi_z_w = (value + beta)/(self.nz[ii] + V * beta)
-                if self.id2word[wordID]:
-                    p_word.append((self.id2word[wordID], phi_z_w) if self.nzw[ii][wordID] > 0 else (self.id2word[wordID], 0))
+            if self.mz[ii]:
+                for wordID, value in enumerate(self.nzw[ii]):
+                    phi_z_w = (value + beta)/(self.nz[ii] + V * beta)
+                    if self.dict_[wordID]:
+                        p_word.append((self.dict_[wordID], phi_z_w) if self.nzw[ii][wordID] > 0 else (self.dict_[wordID], 0))
             if p_word:
                 if len(p_word) >= nwords:
                     p[ii] = [x[0] for x in sorted(p_word, key=lambda x: x[1],
@@ -330,7 +347,7 @@ class GPUDMM:
                              reverse=True) if x[1] > 0]
         return p
 
-    def compare_topic_terms(self, docs, wv=None):
+    def compare_topic_terms(self, wv=None):
         dim, V = self.K, self.vocab_size
         words = self.label_top_words()
         tri = np.diag(np.ones(dim))
@@ -340,13 +357,13 @@ class GPUDMM:
                 for jj in range(ii+1, dim):
                     nwords = min(len(words[ii]), len(words[jj]))
                     if nwords == 10:
-                        v1 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: self.word2id[x], words[ii][:nwords])))), shape=(1, V), dtype=float)
-                        v2 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: self.word2id[x], words[jj][:nwords])))), shape=(1, V), dtype=float)
+                        v1 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: self.dict_.token2id[x], words[ii][:nwords])))), shape=(1, V), dtype=float)
+                        v2 = csr_matrix(([1]*nwords, ([0]*nwords, list(map(lambda x: self.dict_.token2id[x], words[jj][:nwords])))), shape=(1, V), dtype=float)
                     else:
                         v1_nwords = len(words[ii])
                         v2_nwords = len(words[jj])
-                        v1 = csr_matrix(([1]*v1_nwords, ([0]*v1_nwords, list(map(lambda x: self.word2id[x], words[ii])))), shape=(1, V), dtype=float)
-                        v2 = csr_matrix(([1]*v2_nwords, ([0]*v2_nwords, list(map(lambda x: self.word2id[x], words[jj])))), shape=(1, V), dtype=float)
+                        v1 = csr_matrix(([1]*v1_nwords, ([0]*v1_nwords, list(map(lambda x: self.dict_.token2id[x], words[ii])))), shape=(1, V), dtype=float)
+                        v2 = csr_matrix(([1]*v2_nwords, ([0]*v2_nwords, list(map(lambda x: self.dict_.token2id[x], words[jj])))), shape=(1, V), dtype=float)
                     tri[ii, jj] = cosine_similarity(v1, v2)
         else:
             for ii in range(dim):
