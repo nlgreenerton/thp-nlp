@@ -168,6 +168,34 @@ class MovieGroupProcess:
                 break
 
             cluster_count = cluster_count_new
+
+        # choose best label after iterations
+        for id_ in self.to_include:
+            doc = corpus[id_]
+            if self.tfidf:
+                doc = self.tf_model[corpus[id_]]
+
+            z_old = self.d_z[id_]
+            self.m_z[z_old] -= 1
+            self.n_z[z_old] -= np.sum(doc, 0)[1]
+
+            for wordID, count_ in doc:
+                self.n_z_w[z_old][wordID] -= count_
+
+                if self.n_z_w[z_old][wordID] == 0:
+                    del self.n_z_w[z_old][wordID]
+
+            z_new = self.choose_best_label(doc, id_)
+
+            self.d_z[id_] = z_new
+            self.m_z[z_new] += 1
+            self.n_z[z_new] += np.sum(doc, 0)[1]
+
+            for wordID, count_ in doc:
+                if wordID not in self.n_z_w[z_new]:
+                    self.n_z_w[z_new][wordID] = 0
+                self.n_z_w[z_new][wordID] += count_
+
         return
 
     def score(self, doc, docID):
