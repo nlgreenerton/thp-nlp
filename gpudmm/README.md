@@ -1,6 +1,6 @@
 ## GPU-based Dirichlet multinomial mixture model (GPUDMM)
 
-Largely based on [this code](https://github.com/WHUIR/GPUDMM/tree/2b89d949557e99cbfce714a7c486f954f0c65ee8), but implemented in Python. Changed to include `random_state` variable to standardize initial topic settings of documents and for reproducibility. TFIDF-weighting can be toggled with `tfidf` setting. Documents without any tokens are assigned label -1 and not involved in any fitting steps.
+Largely based on [this code](https://github.com/WHUIR/GPUDMM/tree/2b89d949557e99cbfce714a7c486f954f0c65ee8), but implemented in Python. Changed to include `random_state` variable to standardize initial topic settings of documents and for reproducibility. TFIDF-weighting can be toggled with `tfidf` setting. Documents without any tokens are assigned label -1 and not involved in any fitting steps. The code will run some specified number of iterations then, upon completion of those iterations, do a final topic assignment based on the highest probability label for each document.
 
 Usage:
 ```python
