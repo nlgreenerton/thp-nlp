@@ -37,6 +37,8 @@ After fitting, the MovieGroupProcess object includes perhaps useful methods:
 
 `label_top_words(nwords=10)` returns a list of length `K` populated with top `nwords` words found in each populated topic. Topics without assigned documents return as empty lists.
 
-`compare_topic_terms(docs, wv=None)` returns the number of topics with similarity >= 0.5, compared either by a bag-of-words methodology or using [Gensim](https://radimrehurek.com/gensim_3.8.3/index.html) word2vec word vectors in KeyedVectors format `wv`, if specified.
+`compare_topic_terms(wv=None)` returns the number of topics with similarity >= 0.5, compared either by a bag-of-words methodology or using [Gensim](https://radimrehurek.com/gensim_3.8.3/index.html) word2vec word vectors in KeyedVectors format `wv`, if specified.
 
 `wmd(docs, wv)` returns the [word mover's distance](http://proceedings.mlr.press/v37/kusnerb15.pdf) by averaging the word mover's distance between all possible pairs of documents within each topic. Word vectors `wv` again in Gensim KeyedVectors format must previously be normalized using the `init_sims()` method.
+
+`compute_pdz()` calculates the probability of each document being in each topic using the same `_score` method used in the iterations and stores the result in the `pdz` attribute, a probability that is calculated each iteration but not saved.
