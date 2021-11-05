@@ -77,7 +77,6 @@ class GPUDMM:
         self.to_exclude = np.array(list(set(range(D)).difference(set(self.to_include))))
 
         self.corpus_size = len(self.to_include)
-        # C = self.corpus_size
 
         d_z = [-1 for i in range(D)]
         V, K = self.vocab_size, self.K
@@ -197,6 +196,35 @@ class GPUDMM:
             if total_transfers == 0 and _iter > 25:
                 print("Converged. Breaking out.")
                 break
+
+        self.updateTopicProbabilityGivenWord()
+        for s, id_ in enumerate(self.to_include):
+            tia = d2wil[id_]
+            preTopic = self.assignmentList[id_]
+            self.ratioCount(preTopic, id_, tia, -1, random_state)
+            pzDist = []
+            for topic in range(K):
+                pz = 1.0 * (self.mz[topic] + alpha) / (C - 1 + K * alpha)
+                value = 1.0
+
+                for t, termID in enumerate(tia):
+                    value *= (self.nzw[topic][termID] + beta) / (self.nz[topic] + V * beta + t)
+
+                value = value * pz
+                pzDist.append(value)
+
+# topic assignment as max according to pzDist
+            pzDist = np.asarray(pzDist)
+            pzNorm = sum(pzDist)
+            pzNorm = pzNorm if pzNorm > 0 else 1
+            pzDist = pzDist/pzNorm
+            newTopic = np.argmax(pzDist)
+
+            if newTopic != preTopic:
+                self.assignmentList[id_] = newTopic
+
+            self.ratioCount(newTopic, id_, tia, 1, random_state)
+
         return
 
     def ratioCount(self, topic, docID, termIDArray, flag, random_state=None):
@@ -280,9 +308,8 @@ class GPUDMM:
         self.compute_pz()
         self.compute_phi()
 
-        V, D = self.vocab_size, self.number_docs
+        V = self.vocab_size
         tpgw, K = self.topicProbabilityGivenWord, self.K
-        # d2wil = self.docToWordIDList
 
         for i in range(V):
             row_sum = 0.0
@@ -293,17 +320,6 @@ class GPUDMM:
             for j in range(K):
                 tpgw[i][j] = tpgw[i][j] / row_sum
 
-        # for id_ in self.to_include:
-        #     tia = d2wil[id_]
-        #     row_sum = 0.0
-        #     for j in range(K):
-        #         self.pdz[id_][j] = 0
-        #         for wordID in tia:
-        #             self.pdz[id_][j] += tpgw[wordID][j]
-        #
-        #         row_sum += self.pdz[id_][j]
-        #     for j in range(K):
-        #         self.pdz[id_][j] = self.pdz[id_][j]/row_sum
         self.topicProbabilityGivenWord = tpgw
         return
 
@@ -329,9 +345,8 @@ class GPUDMM:
         '''
         beta, K, V = self.beta, self.K, self.vocab_size
         p = [[] for _ in range(K)]
-        # topics = np.unique(self.assignmentList)
 
-        for ii in range(K):#topics:
+        for ii in range(K):
             p_word = []
             if self.mz[ii]:
                 for wordID, value in enumerate(self.nzw[ii]):
