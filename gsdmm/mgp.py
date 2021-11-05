@@ -123,7 +123,7 @@ class MovieGroupProcess:
                     self.n_z_w[z][wordID] = 0
                 self.n_z_w[z][wordID] += count_
 
-            self.pdz = [list(np.zeros(K)) for _ in range(D)]
+            self.pdz = [[] for _ in range(D)]
 
     def fit(self):
         n_iters, corpus, K = self.n_iters, self.corpus, self.K
@@ -321,3 +321,30 @@ class MovieGroupProcess:
                             tot += 1
                             sum_ += wv.wmdistance(' '.join(d1), ' '.join(d2))
         return sum_/tot
+
+    def compute_pdz(self):
+        # m_z, n_z, n_z_w = self.m_z, self.n_z, self.n_z_w
+        pdz = self.pdz
+        for id_ in self.to_include:
+            doc = self.corpus[id_]
+            if self.tfidf:
+                doc = self.tf_model[self.corpus[id_]]
+            z = self.d_z[id_]
+            self.m_z[z] -= 1
+            self.n_z[z] -= np.sum(doc, 0)[1]
+            for wordID, count_ in doc:
+                self.n_z_w[z][wordID] -= count_
+                if self.n_z_w[z][wordID] == 0:
+                    del self.n_z_w[z][wordID]
+
+            p = self.score(doc, id_)
+            pdz[id_] = p
+
+            self.m_z[z] += 1
+            self.n_z[z] += np.sum(doc, 0)[1]
+            for wordID, count_ in doc:
+                if wordID not in self.n_z_w[z]:
+                    self.n_z_w[z][wordID] = 0
+                self.n_z_w[z][wordID] += count_
+
+        self.pdz = pdz
