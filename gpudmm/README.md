@@ -52,7 +52,7 @@ gpu.run_iteration()
 
 - `random_state`: integer seed
 
-- `schema`: output from `buildSchema()`
+- `similarity_matrix`: output from `buildSchema()`
 
 - `threshold`: float between 0 and 1, threshold used in `buildSchema()`
 
