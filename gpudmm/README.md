@@ -64,4 +64,4 @@ After fitting, the GPUDMM object includes other methods:
 
 `wmd(docs, wv)` returns the [word mover's distance](http://proceedings.mlr.press/v37/kusnerb15.pdf) by averaging the word mover's distance between all possible pairs of documents within each topic.
 
-`compute_pdz()` calculated the topic probability given document for the fitted model, assigning the result to the pdz attribute.
+`compute_pdz()` calculates the topic probability given document for the fitted model, assigning the result to the pdz attribute.
