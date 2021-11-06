@@ -60,10 +60,11 @@ class GPUDMM:
         self.number_docs = D
         self.tfidf = tfidf
         self.dict_ = Dictionary(docs)
-        self.dict_.filter_extremes(min_df, max_df)
+
         if '' in self.dict_.token2id:
             id_ = self.dict_.token2id['']
             self.dict_.filter_tokens([id_])
+        self.dict_.filter_extremes(min_df, max_df)
 
         self.corpus = [self.dict_.doc2bow(line) for line in docs]
         self.vocab_size = len(self.dict_)
@@ -131,16 +132,16 @@ class GPUDMM:
         self.pdz = [list(np.zeros(K)) for _ in range(D)]
         return
 
-    def loadSchema(self, schema, threshold):
-        keep = self.dict_.keys()
-        filt_schema = dict(filter(lambda x: x[0] in keep, schema.items()))
-        final_schema = dict()
-        for k, v in filt_schema.items():
-            final_schema[k] = []
-            for num in v:
-                if num in keep:
-                    final_schema[k].append(num)
-        self.schemaMap = final_schema
+    def loadSchema(self, similarity_matrix, threshold):
+        schema = {}
+        V = self.vocab_size
+        for k in range(V):
+            similarWordID = similarity_matrix.matrix.nonzero()[1][
+                            similarity_matrix.matrix.nonzero()[0] == k]
+            similarWordID = similarWordID[similarWordID != k]
+            schema.update({k: similarWordID})
+
+        self.schemaMap = schema
         self.threshold = threshold
         return
 
@@ -412,17 +413,37 @@ class GPUDMM:
                             sum_ += wv.wmdistance(' '.join(d1), ' '.join(d2))
         return sum_/tot
 
+    def compute_pdz(self):
+        pdz, d2wil, tpgw = self.pdz, self.docToWordIDList, self.topicProbabilityGivenWord
+        for id_ in self.to_include:
+            tia = d2wil[id_]
+            row_sum = 0.0
+            for j in range(self.K):
+                for wordID in tia:
+                    pdz[id_][j] += tpgw[wordID][j]
+                row_sum += pdz[id_][j]
 
-def buildSchema(wordVectors, docs, threshold=0.5):
+            for j in range(self.K):
+                pdz[id_][j] = pdz[id_][j] / row_sum
+
+        self.pdz = pdz
+
+
+def buildSchema(wordVectors, docs, threshold=0.5, min_df=1, max_df=1.0):
+    '''
+    Create the schema that maps words to other similar words in the documents.
+    Docs here should match docs later used.
+    Must use the same min_df and max_df here as when running the initNewModel() step.
+
+    can use save and load methods on similarity_matrix
+    '''
     wordVectors_index = WordEmbeddingSimilarityIndex(wordVectors, threshold, 1.0)
     d = Dictionary(docs)
+
+    if '' in d.token2id:
+        id_ = d.token2id['']
+        d.filter_tokens([id_])
+    d.filter_extremes(min_df, max_df)
+
     similarity_matrix = SparseTermSimilarityMatrix(wordVectors_index, d)
-
-    schema = {}
-    for k in range(len(d)):
-        similarWordID = similarity_matrix.matrix.nonzero()[1][
-                        similarity_matrix.matrix.nonzero()[0] == k]
-        similarWordID = similarWordID[similarWordID != k]
-        schema.update({k: similarWordID})
-
-    return schema
+    return similarity_matrix

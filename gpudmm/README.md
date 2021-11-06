@@ -5,7 +5,7 @@ Largely based on [this code](https://github.com/WHUIR/GPUDMM/tree/2b89d949557e99
 Usage:
 ```python
 from gpudmm import gpudmm
-schema = gpudmm.buildSchema(wv, docs, threshold=0.5)
+similarity_matrix = gpudmm.buildSchema(wv, docs, threshold=0.5, min_df=1, max_df=1.0)
 ```
 
 - `wv`: word vectors in [Gensim](https://radimrehurek.com/gensim_3.8.3/index.html) word2vec KeyedVectors format
@@ -14,7 +14,11 @@ schema = gpudmm.buildSchema(wv, docs, threshold=0.5)
 
 - `threshold`: float between 0 and 1, similarity cutoff above which word pair is considered similar enough to be retained in the schema
 
-This first step is quite time-consuming so it wouldn't hurt to save the schema output for later reuse.
+- `min_df`: integer lower bound of occurrences for tokens
+
+- `max_df`: float between 0 and 1, upper bound for tokens
+
+This first step creates the SparseTermSimilarityMatrix from Gensim, which supports save and load methods. The parameters here must match those used in later steps. As this first step is quite time-consuming so it wouldn't hurt to save the similarity_matrix output for later reuse.
 
 ```python
 gpu = gpudmm.GPUDMM(K=40, alpha=.1, beta=.1, num_iter=30, weight=.1)
@@ -34,7 +38,7 @@ Hyperparameters `alpha` and `beta` are also described in the [GSDMM model](https
 
 ```python
 gpu.initNewModel(docs, min_df=1, max_df=1.0, tfidf=False, random_state=40)
-gpu.loadSchema(schema, threshold=0.5)
+gpu.loadSchema(similarity_matrix, threshold=0.5)
 gpu.run_iteration()
 ```
 
@@ -52,10 +56,12 @@ gpu.run_iteration()
 
 - `threshold`: float between 0 and 1, threshold used in `buildSchema()`
 
-After fitting, the GPUDMM object includes perhaps useful methods:
+After fitting, the GPUDMM object includes other methods:
 
 `label_top_words(nwords=10)` returns a list of length `K` populated with top `nwords` words found in each populated topic. Topics without assigned documents return as empty lists.
 
 `compare_topic_terms(wv=None)` returns the number of topics with cosine similarity >= 0.5, compared either by a bag-of-words methodology or using Gensim word2vec word vectors `wv`, if specified.
 
 `wmd(docs, wv)` returns the [word mover's distance](http://proceedings.mlr.press/v37/kusnerb15.pdf) by averaging the word mover's distance between all possible pairs of documents within each topic.
+
+`compute_pdz()` calculated the topic probability given document for the fitted model, assigning the result to the pdz attribute.
