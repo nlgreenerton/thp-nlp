@@ -6,7 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import csr_matrix
 from gensim.models.keyedvectors import WordEmbeddingSimilarityIndex
 from gensim.similarities.termsim import SparseTermSimilarityMatrix
-
+from copy import copy
 
 class GPUDMM:
     def __init__(self, K=8, alpha=0.1, beta=0.1, num_iter=30, weight=0.1):
@@ -19,10 +19,11 @@ class GPUDMM:
         self.threshold = 0.5
         self.number_docs = None
         self.vocab_size = None
+        self.corpus_vocab_size = None
 
-        self.mz = [0 for _ in range(K)]  # cluster doc count
-        self.nz = [0 for _ in range(K)]  # cluster word count
-        self.nzw = [[] for _ in range(K)]  # cluster word distribution
+        self.mz = []
+        self.nz = []
+        self.nzw = []
 
         self.wordGPUFlag = []
         self.docToWordIDList = []
@@ -54,20 +55,16 @@ class GPUDMM:
 
         return np.argmax(multinomial.rvs(1, p, random_state=random_state))
 
-    def initNewModel(self, docs, min_df=1, max_df=1.0, tfidf=False, random_state=None):
+    def initNewModel(self, docs, tfidf=False, random_state=None):
 
         D = len(docs)
+        K = self.K
+
         self.number_docs = D
         self.tfidf = tfidf
-        self.dict_ = Dictionary(docs)
-
-        if '' in self.dict_.token2id:
-            id_ = self.dict_.token2id['']
-            self.dict_.filter_tokens([id_])
-        self.dict_.filter_extremes(min_df, max_df)
-
-        self.corpus = [self.dict_.doc2bow(line) for line in docs]
-        self.vocab_size = len(self.dict_)
+        self.mz = [0 for _ in range(K)]  # cluster doc count
+        self.nz = [0 for _ in range(K)]  # cluster word count
+        self.nzw = [[] for _ in range(K)]  # cluster word distribution
 
         corpus = self.corpus
         if tfidf:
@@ -132,14 +129,25 @@ class GPUDMM:
         self.pdz = [list(np.zeros(K)) for _ in range(D)]
         return
 
-    def loadSchema(self, similarity_matrix, threshold):
+    def loadSchema(self, docs, similarity_matrix, full_dict, threshold):
         schema = {}
-        V = self.vocab_size
-        for k in range(V):
-            similarWordID = similarity_matrix.matrix.nonzero()[1][
-                            similarity_matrix.matrix.nonzero()[0] == k]
-            similarWordID = similarWordID[similarWordID != k]
-            schema.update({k: similarWordID})
+        self.dict_ = full_dict
+        d = self.dict_
+
+        reduced_dict = copy(d)
+        # reduced_dict.filter_extremes(min_df,max_df)
+
+        self.corpus = [d.doc2bow(line) for line in docs]
+        reduced_dict = Dictionary.from_corpus(self.corpus)
+        self.vocab_size = len(full_dict)
+        self.corpus_vocab_size = len(reduced_dict)
+
+        for k in reduced_dict.iterkeys():
+            similarWordID = similarity_matrix.matrix[k].nonzero()[1]
+            if len(similarWordID) > 1:
+                similarWordID = [x for x in similarWordID if (x != k) and (x in reduced_dict)]
+                if similarWordID:
+                    schema.update({k: similarWordID})
 
         self.schemaMap = schema
         self.threshold = threshold
@@ -147,7 +155,7 @@ class GPUDMM:
 
     def run_iteration(self, random_state=None):
         num_iter, d2wil = self.num_iter, self.docToWordIDList
-        K, V = self.K, self.vocab_size
+        K, Vc = self.K, self.corpus_vocab_size
         alpha, beta, C = self.alpha, self.beta, self.corpus_size
 
         for _iter in range(num_iter):
@@ -164,7 +172,7 @@ class GPUDMM:
                     value = 1.0
 
                     for t, termID in enumerate(tia):
-                        value *= (self.nzw[topic][termID] + beta) / (self.nz[topic] + V * beta + t)
+                        value *= (self.nzw[topic][termID] + beta) / (self.nz[topic] + Vc * beta + t)
 
                     value = value * pz
                     pzDist.append(value)
@@ -179,19 +187,6 @@ class GPUDMM:
                 if newTopic != preTopic:
                     total_transfers += 1
                     self.assignmentList[id_] = newTopic
-
-# original random topic assignment
-                # for i in range(1,K):
-                #     pzDist[i] += pzDist[i-1]
-                # u = np.random.rand() * pzDist[-1]
-                # newTopic = -1
-                #
-                # for i in range(K):
-                #     if pzDist[i] >= u:
-                #         newTopic = i
-                #         self.assignmentList[id_] = newTopic
-                #         total_transfers += 1
-                #         break
 
                 self.ratioCount(newTopic, id_, tia, 1, random_state)
             if total_transfers == 0 and _iter > 25:
@@ -209,7 +204,7 @@ class GPUDMM:
                 value = 1.0
 
                 for t, termID in enumerate(tia):
-                    value *= (self.nzw[topic][termID] + beta) / (self.nz[topic] + V * beta + t)
+                    value *= (self.nzw[topic][termID] + beta) / (self.nz[topic] + Vc * beta + t)
 
                 value = value * pz
                 pzDist.append(value)
@@ -332,26 +327,27 @@ class GPUDMM:
             self.pz[i] = (nz[i] + alpha) / (sum_ + K * alpha)
 
     def compute_phi(self):
-        nzw, K, beta, V = self.nzw, self.K, self.beta, self.vocab_size
+        nzw, K, beta = self.nzw, self.K, self.beta
+        Vc, V = self.corpus_vocab_size, self.vocab_size
 
         for i in range(K):
             sum_ = sum(nzw[i])
 
             for j in range(V):
-                self.phi[i][j] = (nzw[i][j] + beta) / (sum_ + V * beta)
+                self.phi[i][j] = (nzw[i][j] + beta) / (sum_ + Vc * beta)
 
     def label_top_words(self, nwords=10):
         '''
         List of top nwords for each cluster
         '''
-        beta, K, V = self.beta, self.K, self.vocab_size
+        beta, K, Vc = self.beta, self.K, self.corpus_vocab_size
         p = [[] for _ in range(K)]
 
         for ii in range(K):
             p_word = []
             if self.mz[ii]:
                 for wordID, value in enumerate(self.nzw[ii]):
-                    phi_z_w = (value + beta)/(self.nz[ii] + V * beta)
+                    phi_z_w = (value + beta)/(self.nz[ii] + Vc * beta)
                     if self.dict_[wordID]:
                         p_word.append((self.dict_[wordID], phi_z_w) if self.nzw[ii][wordID] > 0 else (self.dict_[wordID], 0))
             if p_word:
@@ -428,14 +424,56 @@ class GPUDMM:
 
         self.pdz = pdz
 
+    def intercluster(self):
+        '''Intercluster distance. Must have run compute_pdz() prior.'''
+        K = self.K
+        inter_ = 0.0
+        for k in range(K):
+            if self.mz[k] > 0:
+                docs_k = np.where(np.array(self.assignmentList) == k)[0]
+                for kp in range(k+1, K):
+                    if self.mz[kp] > 0:
+                        docs_kp = np.where(np.array(self.assignmentList) == kp)[0]
+                        for id_k in docs_k:
+                            for id_kp in docs_kp:
+                                m = np.multiply(0.5, np.add(self.pdz[id_k], self.pdz[id_kp]))
+                                kl_k = k_l(self.pdz[id_k], m)
+                                kl_kp = k_l(self.pdz[id_kp], m)
+                                dis = 0.5*(kl_k+kl_kp)
+                                inter_ += dis/(self.mz[k]*self.mz[kp])
+        populated_clusters = np.count_nonzero(self.mz)
+        return inter_/(populated_clusters*(populated_clusters - 1))
+
+    def intracluster(self):
+        '''Intracluster distance. Must have run compute_pdz() prior.'''
+        K = self.K
+        intra_k = np.zeros(K)
+        for k in range(K):
+            intra = 0.0
+            if self.mz[k] > 0:
+                docs = np.where(np.array(self.assignmentList) == k)[0]
+                D = docs.shape[0]
+                for i in range(D):
+                    id_i = docs[i]
+                    for j in range(i+1, D):
+                        id_j = docs[j]
+                        m = np.multiply(0.5, np.add(self.pdz[id_i],self.pdz[id_j]))
+                        kl_i = k_l(self.pdz[id_i], m)
+                        kl_j = k_l(self.pdz[id_j], m)
+                        dis_ij = 0.5*(kl_i + kl_j)
+                        intra += 2*dis_ij/(self.mz[k]*(self.mz[k]-1))
+            intra_k[k] = intra
+        populated_clusters = np.count_nonzero(self.mz)
+        return np.sum(intra_k)/populated_clusters
+
 
 def buildSchema(wordVectors, docs, threshold=0.5, min_df=1, max_df=1.0):
     '''
-    Create the schema that maps words to other similar words in the documents.
-    Docs here should match docs later used.
-    Must use the same min_df and max_df here as when running the initNewModel() step.
+    Create the similarity matrix and dictionary that map words to other similar words in the documents.
+    Docs here are the full corpus, if using train/test sets later.
+    Must use the same min_df and max_df here desired as when running the subsequent steps.
 
-    can use save and load methods on similarity_matrix
+    Can use save and load methods on similarity_matrix and dictionary outputs
     '''
     wordVectors_index = WordEmbeddingSimilarityIndex(wordVectors, threshold, 1.0)
     d = Dictionary(docs)
@@ -446,4 +484,12 @@ def buildSchema(wordVectors, docs, threshold=0.5, min_df=1, max_df=1.0):
     d.filter_extremes(min_df, max_df)
 
     similarity_matrix = SparseTermSimilarityMatrix(wordVectors_index, d)
-    return similarity_matrix
+    return similarity_matrix, d
+
+
+def k_l(p, q):
+    '''Kullback-Leibler divergence'''
+    sum_ = 0.0
+    for i in range(len(p)):
+        sum_ += p[i]*np.log(p[i]/q[i])
+    return sum_
