@@ -44,9 +44,10 @@ class MovieGroupProcess:
         # slots for computed variables
         self.number_docs = None
         self.vocab_size = None
-        self.m_z = [0 for _ in range(K)]  # cluster doc count
-        self.n_z = [0 for _ in range(K)]  # cluster word count
-        self.n_z_w = [{} for i in range(K)]  # cluster word distrib
+        self.corpus_vocab_size = None
+        self.m_z = []
+        self.n_z = []
+        self.n_z_w = []
         self.d_z = []
         self.pdz = []
         self.dict_ = Dictionary()
@@ -80,7 +81,10 @@ class MovieGroupProcess:
         self.number_docs = D
         self.tfidf = tfidf
 
-        self.d_z = [-1 for i in range(len(docs))]
+        self.d_z = [-1 for _ in range(len(docs))]  # doc assignment
+        self.m_z = [0 for _ in range(K)]  # cluster doc count
+        self.n_z = [0 for _ in range(K)]  # cluster word count
+        self.n_z_w = [{} for _ in range(K)]  # cluster word distrib
 
         # create dictionary
         self.dict_ = Dictionary(docs)
@@ -91,16 +95,15 @@ class MovieGroupProcess:
 
         self.corpus = [self.dict_.doc2bow(line) for line in docs]
         self.vocab_size = len(self.dict_)
+        reduced_dict = Dictionary.from_corpus(self.corpus)
+        self.corpus_vocab_size = len(reduced_dict)
 
         corpus = self.corpus
         if tfidf:
             tf = TfidfModel(corpus, dictionary=self.dict_)
             self.tf_model = tf
         self.to_include = np.flatnonzero(corpus)
-        # self.to_exclude = np.array(list(set(range(D)).difference(set(self.to_include))))
 
-        # self.corpus = [self.dict_.doc2bow(line) for line in docs[to_include]]
-        # corpus = self.corpus
         self.corpus_size = len(self.to_include)
         C = self.corpus_size
 
@@ -210,7 +213,7 @@ class MovieGroupProcess:
             the probability of the document appearing in a particular cluster
         '''
         alpha, beta, K = self.alpha, self.beta, self.K
-        V, C = self.vocab_size, self.corpus_size
+        C, Vc = self.corpus_size, self.corpus_vocab_size
 
         p = [0 for _ in range(K)]
 
@@ -227,7 +230,7 @@ class MovieGroupProcess:
             for wordID, count_ in doc:
                 lN2 += count_*np.log(self.n_z_w[label].get(wordID, 0) + beta)
             for j in range(1, doc_size + 1):
-                lD2 += np.log(self.n_z[label] + V * beta + j - 1)
+                lD2 += np.log(self.n_z[label] + Vc * beta + j - 1)
             p[label] = np.exp(lN1 - lD1 + lN2 - lD2)
 
         # normalize the probability vector
@@ -249,14 +252,14 @@ class MovieGroupProcess:
         '''
         List of top nwords for each cluster
         '''
-        beta, K, V = self.beta, self.K, self.vocab_size
+        beta, K, Vc = self.beta, self.K, self.corpus_vocab_size
 
         p = [[] for _ in range(K)]
         for ii in range(K):
             if self.m_z[ii]:
                 p_word = []
                 for word in self.n_z_w[ii].keys():
-                    phi_z_w = (self.n_z_w[ii][word] + beta)/(self.n_z[ii] + V * beta)
+                    phi_z_w = (self.n_z_w[ii][word] + beta)/(self.n_z[ii] + Vc * beta)
                     if word:
                         p_word.append((word, phi_z_w))
                 if p_word:
@@ -348,3 +351,54 @@ class MovieGroupProcess:
                 self.n_z_w[z][wordID] += count_
 
         self.pdz = pdz
+
+    def intercluster(self):
+        '''Intercluster distance. Must have run compute_pdz() prior.'''
+        K = self.K
+        inter_ = 0.0
+        for k in range(K):
+            if self.m_z[k] > 0:
+                docs_k = np.where(np.array(self.d_z) == k)[0]
+                for kp in range(k+1, K):
+                    if self.m_z[kp] > 0:
+                        docs_kp = np.where(np.array(self.d_z) == kp)[0]
+                        for id_k in docs_k:
+                            for id_kp in docs_kp:
+                                m = np.multiply(0.5, np.add(self.pdz[id_k], self.pdz[id_kp]))
+                                kl_k = k_l(self.pdz[id_k], m)
+                                kl_kp = k_l(self.pdz[id_kp], m)
+                                dis = 0.5*(kl_k+kl_kp)
+                                inter_ += dis/(self.m_z[k]*self.m_z[kp])
+        populated_clusters = np.count_nonzero(self.m_z)
+        return inter_/(populated_clusters*(populated_clusters - 1))
+
+    def intracluster(self):
+        '''Intracluster distance. Must have run compute_pdz() prior.'''
+        K = self.K
+        intra_k = np.zeros(K)
+        for k in range(K):
+            intra = 0.0
+            if self.m_z[k] > 0:
+                docs = np.where(np.array(self.d_z) == k)[0]
+                D = docs.shape[0]
+                for i in range(D):
+                    id_i = docs[i]
+                    for j in range(i+1, D):
+                        id_j = docs[j]
+                        m = np.multiply(0.5, np.add(self.pdz[id_i],self.pdz[id_j])) ############
+                        kl_i = k_l(self.pdz[id_i], m)
+                        kl_j = k_l(self.pdz[id_j], m)
+                        dis_ij = 0.5*(kl_i + kl_j)
+                        intra += 2*dis_ij/(self.m_z[k]*(self.m_z[k]-1))
+            intra_k[k] = intra
+        populated_clusters = np.count_nonzero(self.m_z)
+        return np.sum(intra_k)/populated_clusters
+
+
+def k_l(p, q):
+    '''Kullback-Leibler divergence'''
+    sum_ = 0.0
+    for i in range(len(p)):
+        if p[i] != 0 and q[i] != 0:
+            sum_ += p[i]*np.log(p[i]/q[i])
+    return sum_

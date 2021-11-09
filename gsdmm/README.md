@@ -42,3 +42,5 @@ After fitting, the MovieGroupProcess object includes perhaps useful methods:
 `wmd(docs, wv)` returns the [word mover's distance](http://proceedings.mlr.press/v37/kusnerb15.pdf) by averaging the word mover's distance between all possible pairs of documents within each topic. Word vectors `wv` again in Gensim KeyedVectors format must previously be normalized using the `init_sims()` method.
 
 `compute_pdz()` calculates the probability of each document being in each topic using the same `_score` method used in the iterations and stores the result in the `pdz` attribute, a probability that is calculated each iteration but not saved.
+
+`intracluster()` and `intercluster()` calculate the intracluster and intercluster distances of the resulting fitted model, the formula of which is available [here](https://doi.org/10.1145/2488388.2488514). `compute_pdz()` must have been run prior.
